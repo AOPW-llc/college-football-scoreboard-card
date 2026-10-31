@@ -31,6 +31,9 @@ straight from the browser.
   - Started or finished: `#3 Georgia (31) - #17 Florida (20) Final` or
     `#22 Arizona (14) - #13 Texas Tech (10) 7:42/3rd`
   - Not started: `#1 Miami v. North Carolina, 7:30 PM`
+- **Day view.** On a day with more than one game, tap its date to see every
+  listed game side by side in kickoff order, each in its own column. **‹ Week**
+  goes back.
 - **Choose which games to list:** all FBS games, only games with a ranked
   team, or one conference. Your favorite team's game is always listed.
 - **Picks the best game.** Without a favorite team (or on its bye week), each
@@ -100,7 +103,7 @@ show_odds: true
 | Option | Default | Description |
 |---|---|---|
 | `team` | none | Favorite team's ESPN abbreviation (e.g. `UGA`, `OSU`, `ALA`, `TEX`). Its game is selected automatically on the days it plays. The visual editor lists every FBS team. |
-| `games` | `all` | Which games each day's dropdown lists: `all` (every game involving an FBS team), `top25` (games with an AP-ranked team), or a conference's ESPN id (see below). |
+| `games` | `all` | Which games each day's dropdown and day view list: `all` (every game involving an FBS team), `top25` (games with an AP-ranked team), or a conference's ESPN id (see below). |
 | `days` | `auto` | How many days of the week show at once (`auto` or `1`–`7`). The rest of the week is a swipe or scroll away, and the arrows always move a whole week. See below. |
 | `refresh_interval` | `30` | Seconds between refreshes while a game is live (10–300). |
 | `show_odds` | `true` | Show the betting line before kickoff. |

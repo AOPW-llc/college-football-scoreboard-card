@@ -7,7 +7,7 @@
  * the local calendar day, so a late game belongs to the evening it kicks off.
  */
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const CARD_TAG = 'college-football-scoreboard-card';
 
 const API = 'https://site.api.espn.com/apis/site/v2/sports/football/college-football';
@@ -341,6 +341,10 @@ const STYLE = `
   .dhead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   .date { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .count { font-size: 14px; font-weight: 400; color: var(--secondary-text-color); margin-left: 6px; }
+  /* a day with more than one game: its date opens the day view */
+  .day-btn { font-family: inherit; color: inherit; background: none; border: none; padding: 0; margin: 0; cursor: pointer; text-align: left; }
+  .day-btn .go { font-size: 18px; font-weight: 400; color: var(--primary-color); margin-left: 6px; }
+  .col.is-live { border-color: var(--primary-color); }
   .dow { font-size: 13px; color: var(--secondary-text-color); }
   .is-today .dow { color: var(--primary-color); font-weight: 600; }
   .picker { position: relative; }
@@ -726,6 +730,7 @@ class CollegeFootballScoreboardCard extends HTMLElement {
         if (saved) {
           this._scrollToToday = false;
           this._scrollToDay = Math.max(0, Math.min(Number(saved.col) || 0, this._cols.length - this._vis));
+          if (saved.dayv) this._dayView = String(saved.dayv);
           if (saved.team) this._openTeam(String(saved.team), { restoring: true });
         }
       }
@@ -750,6 +755,7 @@ class CollegeFootballScoreboardCard extends HTMLElement {
         this._pickGame(c);
       }
       await Promise.all(cols.map(c => this._loadSummary(c)));
+      if (this._dayView) await this._loadDaySummaries(false);
       this._error = null;
       this._updated = new Date();
     } catch (e) {
@@ -843,12 +849,15 @@ class CollegeFootballScoreboardCard extends HTMLElement {
     const scrollLeft = scroller?.scrollLeft;
     const single = this._vis === 1;
     const tv = this._teamView;
+    const dc = !tv && this._dayCol();
     if (tv && scroller) this._colsScroll = scrollLeft; // come back to the same place
     const last = addDays(this._start, this._cols.length - 1);
     const md = d => `${d.getMonth() + 1}/${d.getDate()}`;
     this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>
       <div class="top${single ? ' single-top' : ''}">
-        <div class="range">${tv ? '<button class="back" id="back">‹ Back</button>' : `
+        <div class="range">${tv ? '<button class="back" id="back">‹ Back</button>' : dc ? `
+          <button class="back" id="dayback">‹ Week</button>
+          <div class="wkt"><span class="wkn">${esc(dc.day.toLocaleDateString('en-US', { weekday: 'long' }))} ${fmtDate(dc.day)}</span><span class="wk">${dc.games.length} ${dc.games.length === 1 ? 'game' : 'games'}</span></div>` : `
           <button class="nav" id="left" aria-label="Previous week" title="Previous week">‹</button>
           <button class="nav" id="right" aria-label="Next week" title="Next week">›</button>
           <div class="wkt">${this._week.label ? `<span class="wkn">${esc(this._week.label)}</span>` : ''}${single ? '' : `<span class="wk">${md(this._start)} – ${md(last)}</span>`}</div>
@@ -858,13 +867,22 @@ class CollegeFootballScoreboardCard extends HTMLElement {
         <button class="refresh" id="refresh" title="Refresh now">↻</button>
       </div>
       ${this._error ? `<div class="err">${esc(this._error)}</div>` : ''}
-      ${tv ? this._teamViewHTML(tv) : `${this._vis < this._cols.length ? this._chipsHTML() : ''}
+      ${tv ? this._teamViewHTML(tv) : dc ? this._dayViewHTML(dc, single) : `${this._vis < this._cols.length ? this._chipsHTML() : ''}
       <div class="cols${single ? ' single' : ''}" style="--vis:${this._vis}">${this._cols.map((c, i) => this._colHTML(c, i)).join('')}</div>`}
       ${this._updated ? `<div class="foot">Updated ${fmtTime(this._updated)}</div>` : ''}
     </ha-card>`;
     const cols = this.shadowRoot.querySelector('.cols');
     if (!cols) { this._bind(); this._saveView(); return; }
     if (this._colsScroll != null) { this._keepScroll = this._colsScroll; this._colsScroll = null; }
+    if (dc) {
+      // The week's own scroll jumps wait for the week to be back on screen
+      const left = this._dayScrollTo ?? this._keepScroll ?? scrollLeft;
+      this._dayScrollTo = this._keepScroll = null;
+      if (left) this._setScroll(cols, left);
+      this._bind();
+      this._saveView();
+      return;
+    }
     // Jumps wait until the card is on screen and its columns have a width
     const step = this._colStep(cols);
     if (this._scrollToToday && step) {
@@ -881,13 +899,13 @@ class CollegeFootballScoreboardCard extends HTMLElement {
   /** Remember the week, the day scrolled to and any open team page, for when the card is rebuilt. */
   _saveView() {
     if (!this._calendarReady || this._sliding) return;
-    const cols = this.shadowRoot.querySelector('.cols');
+    const cols = this._dayView ? null : this.shadowRoot.querySelector('.cols'); // the day view's strip isn't the week's
     const step = cols ? this._colStep(cols) : 0;
     this._viewCol = this._scrollToDay ?? (this._scrollToToday ? this._todayCol()
       : step ? Math.round(cols.scrollLeft / step) : this._viewCol ?? 0);
     try {
       sessionStorage.setItem(VIEW_KEY, JSON.stringify({
-        day: this._todayKey, start: dayKey(this._start), col: this._viewCol, team: this._teamView ?? null,
+        day: this._todayKey, start: dayKey(this._start), col: this._viewCol, team: this._teamView ?? null, dayv: this._dayView ?? null,
       }));
     } catch { /* not remembered */ }
   }
@@ -944,7 +962,9 @@ class CollegeFootballScoreboardCard extends HTMLElement {
     const isToday = dayKey(c.day) === this._todayKey;
     const g = this._selected(c);
     return `<div class="col${isToday ? ' is-today' : ''}">
-      <div class="dhead"><span class="date">${fmtDate(c.day)}${c.games.length ? `<span class="count">${c.games.length} ${c.games.length === 1 ? 'game' : 'games'}</span>` : ''}</span>
+      <div class="dhead">${c.games.length > 1
+        ? `<button class="date day-btn" data-dayview="${dayKey(c.day)}" title="All games this day">${fmtDate(c.day)}<span class="count">${c.games.length} games</span><span class="go" aria-hidden="true">›</span></button>`
+        : `<span class="date">${fmtDate(c.day)}${c.games.length ? '<span class="count">1 game</span>' : ''}</span>`}
         <span class="dow">${isToday ? 'Today' : esc(c.day.toLocaleDateString('en-US', { weekday: 'long' }))}</span></div>
       ${this._pickerHTML(c, i)}
       ${g ? this._gameHTML(g, c) : ''}
@@ -1112,6 +1132,75 @@ class CollegeFootballScoreboardCard extends HTMLElement {
     requestAnimationFrame(frame);
   }
 
+  /* ── day view: every listed game of one day, in kickoff order ── */
+
+  /** The week column the day view shows; closes the view when that day has left the week. */
+  _dayCol() {
+    if (!this._dayView) return null;
+    const c = this._cols.find(x => dayKey(x.day) === this._dayView);
+    if (!c) this._dayView = null;
+    return c ?? null;
+  }
+
+  /**
+   * One column-shaped holder per game ({ day, games: [g], selId, summary }), so
+   * _loadSummary and _gameHTML work on it as on a day column. Kept by game id
+   * across refreshes so box scores already loaded stay put.
+   */
+  _dayHolders(c) {
+    const prev = this._dayHold ?? new Map();
+    this._dayHold = new Map(c.games.map(g => {
+      const h = prev.get(g.id) ?? { day: c.day, summary: c.summary?.id === g.id ? c.summary : null };
+      h.games = [g];
+      h.selId = g.id;
+      return [g.id, h];
+    }));
+    return c.games.map(g => this._dayHold.get(g.id));
+  }
+
+  _dayViewHTML(c, single) {
+    if (!c.games.length) return `<div class="empty muted">${this._loading ? 'Loading games…' : 'No games'}</div>`;
+    return `<div class="cols${single ? ' single' : ''}" style="--vis:${this._vis}">${this._dayHolders(c).map(h => {
+      const g = h.games[0];
+      return `<div class="col${g.state === 'in' ? ' is-live' : ''}">
+        <div class="dhead"><span class="date">${g.timeValid ? fmtTime(g.date) : 'TBD'}</span><span class="dow">${esc(g.tv ?? '')}</span></div>
+        ${this._gameHTML(g, h)}
+      </div>`;
+    }).join('')}</div>`;
+  }
+
+  /**
+   * Box scores for the games on screen (and the next one), not the whole day:
+   * a full Saturday is ~50 games. Runs when the view opens, when a swipe
+   * settles and on each refresh.
+   */
+  async _loadDaySummaries(render = true) {
+    const c = this._dayCol();
+    if (!c || this._teamView) return;
+    const strip = this.shadowRoot.querySelector('.cols');
+    const step = strip ? this._colStep(strip) : 0;
+    const first = step ? Math.round(strip.scrollLeft / step) : 0;
+    const hs = this._dayHolders(c).slice(first, first + this._vis + 1);
+    const before = hs.map(h => h.summary);
+    await Promise.all(hs.map(h => this._loadSummary(h)));
+    if (render && this._dayView === dayKey(c.day) && hs.some((h, i) => h.summary !== before[i])) this._render();
+  }
+
+  _openDay(key) {
+    this._weekScroll = this.shadowRoot.querySelector('.cols')?.scrollLeft ?? null;
+    this._dayView = key;
+    this._dayScrollTo = 0;
+    this._render();
+    this._loadDaySummaries();
+  }
+
+  _closeDay() {
+    this._dayView = null;
+    this._keepScroll = this._weekScroll; // back to the same days of the week
+    this._weekScroll = null;
+    this._render();
+  }
+
   /* ── team view ── */
 
   async _openTeam(id, { restoring = false } = {}) {
@@ -1209,7 +1298,7 @@ class CollegeFootballScoreboardCard extends HTMLElement {
     strip?.addEventListener('scroll', () => {
       this._markChips();
       clearTimeout(this._saveTimer);
-      this._saveTimer = setTimeout(() => this._saveView(), 300); // once the swipe settles
+      this._saveTimer = setTimeout(() => { this._saveView(); if (this._dayView) this._loadDaySummaries(); }, 300); // once the swipe settles
     }, { passive: true });
     this.shadowRoot.querySelectorAll('.chip').forEach(ch => ch.addEventListener('click', () => {
       const step = this._colStep(strip);
@@ -1217,6 +1306,9 @@ class CollegeFootballScoreboardCard extends HTMLElement {
       strip.scrollTo({ left: i * step, behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
     }));
     $('back')?.addEventListener('click', () => this._closeTeam());
+    $('dayback')?.addEventListener('click', () => this._closeDay());
+    this.shadowRoot.querySelectorAll('[data-dayview]').forEach(el =>
+      el.addEventListener('click', () => this._openDay(el.dataset.dayview)));
     this.shadowRoot.querySelectorAll('[data-fold]').forEach(el => el.addEventListener('click', () => {
       const k = el.dataset.fold;
       if (!this._folded.delete(k)) this._folded.add(k);
@@ -1225,7 +1317,12 @@ class CollegeFootballScoreboardCard extends HTMLElement {
     }));
     this.shadowRoot.querySelectorAll('[data-team]').forEach(el =>
       el.addEventListener('click', () => this._openTeam(el.dataset.team)));
-    $('refresh')?.addEventListener('click', () => { this._cols.forEach(c => { c.summary = null; }); this._dates.clear(); this._refresh(); });
+    $('refresh')?.addEventListener('click', () => {
+      this._cols.forEach(c => { c.summary = null; });
+      this._dayHold?.forEach(h => { h.summary = null; });
+      this._dates.clear();
+      this._refresh();
+    });
     this.shadowRoot.querySelectorAll('select[data-col]').forEach(sel => {
       const c = this._cols[Number(sel.dataset.col)];
       sel.addEventListener('change', async () => {
